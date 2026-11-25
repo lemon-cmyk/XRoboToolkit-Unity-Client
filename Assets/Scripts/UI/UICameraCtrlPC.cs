@@ -1,13 +1,22 @@
 using System;
+using System.Globalization;
 using LitJson;
 using Robot;
 using Unity.XR.PICO.TOBSupport;
+using Unity.XR.PXR;
 using UnityEngine;
 
 public partial class UICameraCtrl
 {
     private void OnNetReceive(string functionName, string value)
     {
+        // Haptic feedback is independent of the camera UI visibility.
+        if (functionName == "Haptic")
+        {
+            HandleHapticCommand(value);
+            return;
+        }
+
         if (!gameObject.activeSelf)
         {
             return;
@@ -157,4 +166,103 @@ public partial class UICameraCtrl
             }
         }
     }
+
+    /// <summary>
+    /// Handles a Python-originated haptic command.
+    /// Expected value JSON:
+    /// {"hand":"right","amplitude":0.5,"duration_ms":100,"frequency":150}
+    /// </summary>
+    private void HandleHapticCommand(string value)
+    {
+        try
+        {
+            if (string.IsNullOrWhiteSpace(value))
+            {
+                Debug.LogWarning("[Haptic] Ignoring an empty command.");
+                return;
+            }
+
+            JsonData json = JsonMapper.ToObject(value);
+            if (json == null || !json.IsObject ||
+                !json.ContainsKey("hand") ||
+                !json.ContainsKey("amplitude") ||
+                !json.ContainsKey("duration_ms"))
+            {
+                Debug.LogWarning("[Haptic] Invalid command. Required fields: hand, amplitude, duration_ms.");
+                return;
+            }
+
+            string hand = json["hand"].ToString().Trim().ToLowerInvariant();
+
+            if (!float.TryParse(
+                    json["amplitude"].ToString(),
+                    NumberStyles.Float,
+                    CultureInfo.InvariantCulture,
+                    out float amplitude))
+            {
+                Debug.LogWarning("[Haptic] Invalid amplitude.");
+                return;
+            }
+
+            if (!int.TryParse(
+                    json["duration_ms"].ToString(),
+                    NumberStyles.Integer,
+                    CultureInfo.InvariantCulture,
+                    out int durationMs))
+            {
+                Debug.LogWarning("[Haptic] Invalid duration_ms.");
+                return;
+            }
+
+            int frequency = 150;
+            if (json.ContainsKey("frequency") &&
+                !int.TryParse(
+                    json["frequency"].ToString(),
+                    NumberStyles.Integer,
+                    CultureInfo.InvariantCulture,
+                    out frequency))
+            {
+                Debug.LogWarning("[Haptic] Invalid frequency.");
+                return;
+            }
+
+            PXR_Input.VibrateType vibrateType;
+            switch (hand)
+            {
+                case "left":
+                    vibrateType = PXR_Input.VibrateType.LeftController;
+                    break;
+                case "right":
+                    vibrateType = PXR_Input.VibrateType.RightController;
+                    break;
+                case "both":
+                    vibrateType = PXR_Input.VibrateType.BothController;
+                    break;
+                default:
+                    Debug.LogWarning("[Haptic] Unsupported hand: " + hand);
+                    return;
+            }
+
+            amplitude = Mathf.Clamp01(amplitude);
+            durationMs = Mathf.Clamp(durationMs, 0, 65535);
+            frequency = Mathf.Clamp(frequency, 50, 500);
+
+            PXR_Input.SendHapticImpulse(
+                vibrateType,
+                amplitude,
+                durationMs,
+                frequency
+            );
+
+            Debug.Log(
+                $"[Haptic] Triggered {hand} controller: " +
+                $"amplitude={amplitude:0.##}, duration_ms={durationMs}, frequency={frequency}Hz"
+            );
+        }
+        catch (Exception e)
+        {
+            Debug.LogError("[Haptic] Failed to process command: " + e);
+        }
+    }
+}
 }
